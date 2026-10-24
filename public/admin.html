@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AstraFlint Admin</title>
+<style>
+:root{color-scheme:dark;--bg:#0a0b14;--panel:#131525;--line:#292c43;--text:#f3f4ff;--muted:#a8acc5;--accent:#a78bfa}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#20204a,var(--bg) 45%);font:15px/1.5 system-ui,sans-serif;color:var(--text)}main{max-width:1100px;margin:45px auto;padding:20px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin:18px 0}h1,h2{margin-top:0}p,.muted{color:var(--muted)}input,button,select{font:inherit;border-radius:8px;padding:11px 12px;border:1px solid var(--line);background:#0c0e1a;color:var(--text)}input{display:block;width:100%;margin:6px 0 14px}button{background:var(--accent);color:#171328;border:0;font-weight:700;cursor:pointer;margin:4px 6px 4px 0}button.secondary{background:#292c43;color:var(--text)}.hidden{display:none}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.stat{padding:18px;border-radius:12px;background:#0d1020;border:1px solid var(--line)}.stat b{display:block;font-size:26px}.tabs{display:flex;gap:8px;flex-wrap:wrap}.item{border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0;overflow-wrap:anywhere}.item h3{margin:0}.item small{color:var(--muted)}.item p{white-space:pre-wrap}.error{color:#ffaaa9}.success{color:#a7f3d0}
+</style>
+</head>
+<body><main>
+<h1>AstraFlint <span style="color:var(--accent)">Admin</span></h1>
+<p>Manage incoming project enquiries and internship applications.</p>
+<section class="panel" id="loginPanel"><h2>Admin login</h2><form id="loginForm"><label>Email</label><input name="email" type="email" autocomplete="username" required><label>Password</label><input name="password" type="password" autocomplete="current-password" required><button>Sign in</button></form><p id="loginNote" role="status"></p></section>
+<section id="dashboard" class="hidden">
+<div class="stats"><div class="stat">All enquiries<b id="totalContacts">0</b></div><div class="stat">New enquiries<b id="newContacts">0</b></div><div class="stat">Internship applications<b id="totalInternships">0</b></div><div class="stat">New applications<b id="newInternships">0</b></div></div>
+<section class="panel"><div class="tabs"><button id="contactsTab">Project enquiries</button><button id="internshipsTab" class="secondary">Internship applications</button><button id="refresh" class="secondary">Refresh</button><button id="logout" class="secondary">Log out</button></div><p id="listNote" role="status"></p><div id="records"></div></section>
+</section></main>
+<script>
+let token = '';
+let activeType = 'contacts';
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url, options={}) {
+ const r = await fetch(url, {...options, headers:{'Content-Type':'application/json', ...(token?{Authorization:'Bearer '+token}:{}), ...(options.headers||{})}});
+ const d = await r.json().catch(()=>({message:'Unexpected server response'}));
+ if(!r.ok) throw new Error(d.message||'Request failed');
+ return d;
+}
+$('loginForm').addEventListener('submit', async e=>{
+ e.preventDefault(); const f=e.currentTarget; $('loginNote').textContent='Signing in…';
+ try {const d=await api('/api/admin/login',{method:'POST',body:JSON.stringify({email:f.email.value,password:f.password.value})}); token=d.token; $('loginPanel').classList.add('hidden'); $('dashboard').classList.remove('hidden'); await refreshAll();}
+ catch(err){$('loginNote').className='error';$('loginNote').textContent=err.message;}
+});
+async function refreshAll(){
+ try{const d=await api('/api/admin/summary');$('totalContacts').textContent=d.contacts;$('newContacts').textContent=d.newContacts;$('totalInternships').textContent=d.internships;$('newInternships').textContent=d.newInternships;await loadRecords();}
+ catch(e){$('listNote').className='error';$('listNote').textContent=e.message;}
+}
+async function loadRecords(){
+ $('records').innerHTML='Loading…';
+ try{const d=await api('/api/admin/'+activeType);$('records').innerHTML=d.items.length?d.items.map(x=>{
+  const isContact=activeType==='contacts'; const detail=isContact?`<b>Service:</b> ${esc(x.service)}<br><b>Message:</b><p>${esc(x.message)}</p>`:`<b>Track:</b> ${esc(x.track)}<br><b>Skills / goals:</b><p>${esc(x.skills)}</p>`;
+  const statuses=isContact?['new','in_progress','closed']:['new','reviewing','contacted','closed'];
+  return `<article class="item"><h3>${esc(x.name)}</h3><small>${esc(x.email)} · ${esc(new Date(x.createdAt).toLocaleString())}</small><p>${detail}</p><label>Status: <select data-id="${esc(x._id)}">${statuses.map(s=>`<option ${x.status===s?'selected':''} value="${s}">${s.replace('_',' ')}</option>`).join('')}</select></label> <button data-save="${esc(x._id)}">Save status</button></article>`;
+ }).join(''):'<p>No records yet.</p>';
+ $('records').querySelectorAll('[data-save]').forEach(b=>b.addEventListener('click',async()=>{
+   const id=b.dataset.save;const status=$('records').querySelector(`select[data-id="${CSS.escape(id)}"]`).value;
+   try{await api(`/api/admin/${activeType}/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({status})});$('listNote').className='success';$('listNote').textContent='Status updated.';await refreshAll();}
+   catch(e){$('listNote').className='error';$('listNote').textContent=e.message;}
+ }));
+ }catch(e){$('records').textContent=e.message;}
+}
+$('contactsTab').onclick=()=>{activeType='contacts';$('contactsTab').className='';$('internshipsTab').className='secondary';loadRecords();};
+$('internshipsTab').onclick=()=>{activeType='internships';$('internshipsTab').className='';$('contactsTab').className='secondary';loadRecords();};
+$('refresh').onclick=refreshAll;
+$('logout').onclick=()=>{token='';$('dashboard').classList.add('hidden');$('loginPanel').classList.remove('hidden');$('loginNote').textContent='You have logged out.';};
+</script></body></html>
